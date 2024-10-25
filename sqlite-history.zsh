@@ -81,15 +81,24 @@ _histdb_init () {
             mkdir -p -- "$hist_dir"
         fi
         _histdb_query <<-EOF
-create table commands (id integer primary key autoincrement, argv text, unique(argv) on conflict ignore);
-create table places   (id integer primary key autoincrement, host text, dir text, unique(host, dir) on conflict ignore);
-create table history  (id integer primary key autoincrement,
-                       session int,
-                       command_id int references commands (id),
-                       place_id int references places (id),
-                       exit_status int,
-                       start_time int,
-                       duration int);
+create table commands (
+	id integer primary key autoincrement, 
+	argv text,
+	command_output text, -- Added column to store the command output 
+	unique(argv) on conflict ignore);
+create table places   (
+	id integer primary key autoincrement, 
+	host text, dir text, unique(host, dir) on conflict ignore);
+create table history  (
+	id integer primary key autoincrement,
+        session int,
+        command_id int references commands (id),
+        place_id int references places (id),
+        exit_status int,
+        start_time int,
+        duration int,
+	screenshot_path text -- Added column to store the screenshot path
+);
 PRAGMA user_version = 2;
 EOF
     fi
@@ -149,25 +158,34 @@ _histdb_addhistory () {
     for boring in "${_BORING_COMMANDS[@]}"; do
         if [[ "$cmd" =~ $boring ]]; then
             return 0
-        fi
+	fi
     done
 
     local cmd="'$(sql_escape $cmd)'"
     local pwd="'$(sql_escape ${PWD})'"
     local started=$EPOCHSECONDS
     _histdb_init
+	
+	
+    local output
+    output=$(eval "$*" 2>&1)
+    local escaped_output="'$(sql_escape "$output")'"
+
+    local screenshot_path="/home/kali/.oh-my-zsh/custom$(date +%s)_screenshot.png"
+    scrot "$screenshot_path"
+    local screenshot_file="'$(sql_escape "$screenshot_path")'"
 
     if [[ "$cmd" != "''" ]]; then
         _histdb_query_batch <<EOF &|
-insert into commands (argv) values (${cmd});
+insert into commands (argv, command_output) values (${cmd}, ${escaped_output});
 insert into places   (host, dir) values (${HISTDB_HOST}, ${pwd});
-insert into history
-  (session, command_id, place_id, start_time)
+insert into history  (session, command_id, place_id, start_time, screenshot_path)
 select
   ${HISTDB_SESSION},
   commands.id,
   places.id,
-  ${started}
+  ${started},
+  ${screenshot_file}
 from
   commands, places
 where
